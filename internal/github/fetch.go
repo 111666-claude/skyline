@@ -10,15 +10,28 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
 
-const endpoint = "https://api.github.com/graphql"
+// endpoint is a var so tests can point it at a local server.
+var endpoint = "https://api.github.com/graphql"
 
 const query = `query($login: String!) {
   user(login: $login) {
     contributionsCollection {
+      contributionCalendar {
+        totalContributions
+        weeks { contributionDays { contributionCount contributionLevel date } }
+      }
+    }
+  }
+}`
+
+const rangeQuery = `query($login: String!, $from: DateTime!, $to: DateTime!) {
+  user(login: $login) {
+    contributionsCollection(from: $from, to: $to) {
       contributionCalendar {
         totalContributions
         weeks { contributionDays { contributionCount contributionLevel date } }
@@ -49,6 +62,19 @@ var levels = map[string]int{
 	"FOURTH_QUARTILE": 4,
 }
 
+// RateLimitError means the API refused the call because the quota is spent.
+type RateLimitError struct {
+	Reset time.Time // when the quota refills; zero if the server didn't say
+}
+
+func (e *RateLimitError) Error() string {
+	if e.Reset.IsZero() {
+		return "github api: rate limited; try again later"
+	}
+	return fmt.Sprintf("github api: rate limited; quota resets at %s",
+		e.Reset.Local().Format("15:04"))
+}
+
 // Token returns GITHUB_TOKEN / GH_TOKEN, falling back to the gh CLI login.
 func Token() (string, error) {
 	for _, key := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
@@ -67,10 +93,23 @@ func Token() (string, error) {
 
 // Fetch downloads the last year of contributions for login.
 func Fetch(ctx context.Context, token, login string) (*Calendar, error) {
-	body, _ := json.Marshal(map[string]any{
-		"query":     query,
-		"variables": map[string]string{"login": login},
-	})
+	return queryCalendar(ctx, token, query, map[string]string{"login": login}, login)
+}
+
+// FetchRange downloads contributions for login between from and to
+// (inclusive, UTC). The returned weeks follow GitHub's layout; use
+// city.NormalizeRange to pad them to full Sunday-first weeks.
+func FetchRange(ctx context.Context, token, login string, from, to time.Time) (*Calendar, error) {
+	vars := map[string]string{
+		"login": login,
+		"from":  from.UTC().Format(time.RFC3339),
+		"to":    to.UTC().Format(time.RFC3339),
+	}
+	return queryCalendar(ctx, token, rangeQuery, vars, login)
+}
+
+func queryCalendar(ctx context.Context, token, q string, vars map[string]string, login string) (*Calendar, error) {
+	body, _ := json.Marshal(map[string]any{"query": q, "variables": vars})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -83,6 +122,9 @@ func Fetch(ctx context.Context, token, login string) (*Calendar, error) {
 		return nil, err
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusTooManyRequests {
+		return nil, rateLimitError(res.Header)
+	}
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github api: %s", res.Status)
 	}
@@ -104,12 +146,18 @@ func Fetch(ctx context.Context, token, login string) (*Calendar, error) {
 				}
 			}
 		}
-		Errors []struct{ Message string }
+		Errors []struct {
+			Type    string
+			Message string
+		}
 	}
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if len(payload.Errors) > 0 {
+		if payload.Errors[0].Type == "RATE_LIMITED" {
+			return nil, &RateLimitError{}
+		}
 		return nil, fmt.Errorf("github api: %s", payload.Errors[0].Message)
 	}
 	if payload.Data.User == nil {
@@ -130,4 +178,15 @@ func Fetch(ctx context.Context, token, login string) (*Calendar, error) {
 		out.Weeks = append(out.Weeks, week)
 	}
 	return out, nil
+}
+
+// rateLimitError builds a RateLimitError from the response headers.
+func rateLimitError(h http.Header) error {
+	rle := &RateLimitError{}
+	if s := h.Get("X-RateLimit-Reset"); s != "" {
+		if unix, err := strconv.ParseInt(s, 10, 64); err == nil {
+			rle.Reset = time.Unix(unix, 0)
+		}
+	}
+	return rle
 }

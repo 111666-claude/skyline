@@ -19,7 +19,19 @@ func ANSI(s *city.Scene, t Theme) string {
 		Render(fmt.Sprintf("  %s contributions in the last year", commas(s.Total)))
 	b.WriteString(title + meta + "\n\n")
 
-	for _, row := range s.Rows {
+	for _, row := range renderRows(s.Rows, t) {
+		b.WriteString(row)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// renderRows styles each grid row as one string. CompareANSI joins these
+// side by side, so this is the single place row styling happens.
+func renderRows(rows [][]city.Cell, t Theme) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		var b strings.Builder
 		start := 0
 		for x := 1; x <= len(row); x++ {
 			if x < len(row) && t.fg(row[x]) == t.fg(row[start]) && t.bg(row[x]) == t.bg(row[start]) {
@@ -35,9 +47,9 @@ func ANSI(s *city.Scene, t Theme) string {
 			b.WriteString(style.Render(run.String()))
 			start = x
 		}
-		b.WriteByte('\n')
+		out[i] = b.String()
 	}
-	return b.String()
+	return out
 }
 
 func commas(n int) string {

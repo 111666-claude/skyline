@@ -59,6 +59,28 @@ To write an SVG instead of printing:
 skyline -svg skyline.svg your-username
 ```
 
+### Comparing two periods
+
+To put two date ranges side by side — say, this year against last year — pass them both with `-compare`:
+
+```bash
+skyline -compare "2024-01-01..2024-12-31,2025-01-01..2025-12-31" your-username
+```
+
+Both cities are drawn to the same scale: the tallest building across the two ranges is `-height` rows, so a building that's twice as tall really did have twice the contributions. Each city gets its own title (the date range, or whatever you set with `-titles "Last year,This year"`), and a single shared `less ▪▪▪▪▪ more` legend sits underneath. Only the record week of the whole pair gets an antenna. It works with `-svg` too, and with `-gitea`.
+
+A few rules, so the output stays predictable:
+
+- Ranges are inclusive, and each one grows outward to whole Sunday-first weeks, so buildings are never cut in half. A week that spans New Year's Eve stays one building, and Feb 29 is just another window.
+- Days the API doesn't return (downtime, a Gitea instance that only serves the last year) are drawn as dark windows, not skipped.
+- The two ranges must not overlap, and a range that starts after it ends (or lies entirely in the future) is an error. An end date in the future is quietly clamped to today.
+- If the pair is wider than your terminal, skyline says so and stops instead of wrapping the cities into a mess. Use `-svg`, a smaller `-height`, or shorter ranges — `-weeks` trims each range to its most recent weeks.
+- Titles longer than their city are shortened with an ellipsis.
+
+```bash
+skyline -compare "2024-01-01..2024-12-31,2025-01-01..2025-12-31" -titles "Last year,This year" -svg compare.svg your-username
+```
+
 ### Gitea and Forgejo
 
 To draw a city from a Gitea instance instead of GitHub, pass its base URL with `-gitea`:
@@ -99,6 +121,8 @@ There are 12 of them: `neon` (the default), `synthwave`, `matrix`, `amber`, `ice
 | `-weeks` | `53` | How many recent weeks to draw |
 | `-svg` | | Write an animated SVG to this path instead of printing to the terminal |
 | `-gitea` | | Read contributions from the Gitea or Forgejo instance at this base URL instead of GitHub |
+| `-compare` | | Draw two date ranges side by side: `FROM..TO,FROM..TO` |
+| `-titles` | | Titles for the two `-compare` cities, comma-separated (default: the ranges) |
 
 ## Putting it on your GitHub profile
 

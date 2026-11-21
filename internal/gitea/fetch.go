@@ -30,6 +30,26 @@ func Token() string {
 
 // Fetch downloads the last year of contributions for login from baseURL.
 func Fetch(ctx context.Context, baseURL, token, login string) (*github.Calendar, error) {
+	entries, err := fetchHeatmap(ctx, baseURL, token, login)
+	if err != nil {
+		return nil, err
+	}
+	return buildCalendar(login, entries, time.Now()), nil
+}
+
+// FetchRange downloads contributions for login between from and to
+// (inclusive, UTC). The heatmap endpoint only serves the last year, so days
+// older than that come back as zero. The calendar is one flat list of days;
+// use city.NormalizeRange to pad and group it into Sunday-first weeks.
+func FetchRange(ctx context.Context, baseURL, token, login string, from, to time.Time) (*github.Calendar, error) {
+	entries, err := fetchHeatmap(ctx, baseURL, token, login)
+	if err != nil {
+		return nil, err
+	}
+	return buildCalendarRange(login, entries, from, to), nil
+}
+
+func fetchHeatmap(ctx context.Context, baseURL, token, login string) ([]entry, error) {
 	endpoint := strings.TrimRight(baseURL, "/") + "/api/v1/users/" + url.PathEscape(login) + "/heatmap"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -48,6 +68,8 @@ func Fetch(ctx context.Context, baseURL, token, login string) (*github.Calendar,
 	switch {
 	case res.StatusCode == http.StatusNotFound:
 		return nil, fmt.Errorf("user %q not found, or the heatmap is disabled on this instance", login)
+	case res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusTooManyRequests:
+		return nil, fmt.Errorf("gitea api: rate limited (%s); try again later", res.Status)
 	case res.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("gitea api: %s", res.Status)
 	}
@@ -56,7 +78,7 @@ func Fetch(ctx context.Context, baseURL, token, login string) (*github.Calendar,
 	if err := json.NewDecoder(res.Body).Decode(&entries); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	return buildCalendar(login, entries, time.Now()), nil
+	return entries, nil
 }
 
 // buildCalendar sums entries into UTC days and lays them out like GitHub's
@@ -88,6 +110,37 @@ func buildCalendar(login string, entries []entry, now time.Time) *github.Calenda
 	}
 	if len(week) > 0 {
 		cal.Weeks = append(cal.Weeks, week)
+	}
+	return cal
+}
+
+// buildCalendarRange sums entries into UTC days between from and to
+// (inclusive). Days with no entries are kept with a zero count so the range
+// is complete; levels come from the quartiles of the in-range days. The days
+// are returned as a single flat week — grouping into Sunday-first weeks is
+// city.NormalizeRange's job.
+func buildCalendarRange(login string, entries []entry, from, to time.Time) *github.Calendar {
+	from = from.UTC().Truncate(24 * time.Hour)
+	to = to.UTC().Truncate(24 * time.Hour)
+
+	counts := map[time.Time]int{}
+	for _, e := range entries {
+		day := time.Unix(e.Timestamp, 0).UTC().Truncate(24 * time.Hour)
+		if !day.Before(from) && !day.After(to) {
+			counts[day] += e.Contributions
+		}
+	}
+	q := quartiles(counts)
+
+	cal := &github.Calendar{Login: login}
+	var days []github.Day
+	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+		n := counts[d]
+		cal.Total += n
+		days = append(days, github.Day{Date: d, Count: n, Level: level(n, q)})
+	}
+	if len(days) > 0 {
+		cal.Weeks = [][]github.Day{days}
 	}
 	return cal
 }

@@ -116,3 +116,62 @@ func TestFetch(t *testing.T) {
 		t.Fatalf("missing user error = %v", err)
 	}
 }
+
+func TestBuildCalendarRange(t *testing.T) {
+	entries := []entry{
+		{at("2026-03-01", 9), 2},
+		{at("2026-03-01", 18), 3},
+		{at("2026-03-03", 12), 4},
+		{at("2026-02-01", 12), 50}, // before the range, dropped
+		{at("2026-04-01", 12), 50}, // after the range, dropped
+	}
+	from, _ := time.Parse("2006-01-02", "2026-03-01")
+	to, _ := time.Parse("2006-01-02", "2026-03-05")
+	cal := buildCalendarRange("octo", entries, from, to)
+
+	if cal.Total != 9 {
+		t.Fatalf("total = %d, want 9", cal.Total)
+	}
+	days := cal.Weeks[0]
+	if len(days) != 5 {
+		t.Fatalf("days = %d, want 5 (one per day of the range)", len(days))
+	}
+	if days[0].Count != 5 || days[2].Count != 4 {
+		t.Errorf("counts = %d, %d, want 5, 4", days[0].Count, days[2].Count)
+	}
+	// Days with no entries are kept as zeros so the range stays complete.
+	for _, i := range []int{1, 3, 4} {
+		if days[i].Count != 0 || days[i].Level != 0 {
+			t.Errorf("day %d = %+v, want zero count and level", i, days[i])
+		}
+	}
+}
+
+func TestFetchRangeAndRateLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/users/octo/heatmap":
+			fmt.Fprintf(w, `[{"timestamp":%d,"contributions":4}]`, at("2026-03-02", 10))
+		case "/api/v1/users/busy/heatmap":
+			w.WriteHeader(http.StatusTooManyRequests)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	from, _ := time.Parse("2006-01-02", "2026-03-01")
+	to, _ := time.Parse("2006-01-02", "2026-03-07")
+	cal, err := FetchRange(context.Background(), srv.URL, "", "octo", from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cal.Total != 4 || len(cal.Weeks[0]) != 7 {
+		t.Fatalf("total, days = %d, %d, want 4, 7", cal.Total, len(cal.Weeks[0]))
+	}
+
+	_, err = FetchRange(context.Background(), srv.URL, "", "busy", from, to)
+	if err == nil || !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("rate limit error = %v", err)
+	}
+}

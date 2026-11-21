@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### 🏙️ Compare view
+
+- New `-compare "FROM..TO,FROM..TO"` flag draws two date ranges as side-by-side cities on one shared height scale, with a title per city and a single shared legend. Works with GitHub, Gitea (`-gitea`) and `-svg`
+- New `-titles "A,B"` flag sets the two city titles; the default is the date ranges. Overlong titles are shortened with an ellipsis
+- Ranges grow outward to whole Sunday-first weeks, missing days render as dark windows, and weeks spanning New Year stay one building
+- Overlapping or empty ranges are errors, future end dates clamp to today, and a too-narrow terminal stops with a message naming both widths instead of wrapping
+- GitHub and Gitea rate limiting now fails with a clear "rate limited" error (including the quota reset time when GitHub provides one)
+
 ## 1.1.0 - October 9, 2026
 
 ### 🍵 Gitea

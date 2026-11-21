@@ -48,12 +48,39 @@ const colWidth = 2
 // Build lays out one building per week. Height follows the week's total on a
 // log scale, and windows cycle through that week's days, lit by GitHub level.
 func Build(cal *github.Calendar, opt Options) *Scene {
+	weeks := selectWeeks(cal.Weeks, opt.Weeks)
+	return build(cal, weeks, opt, maxTotal(weeks))
+}
+
+// selectWeeks keeps the most recent opt.Weeks weeks, or all of them.
+func selectWeeks(weeks [][]github.Day, n int) [][]github.Day {
+	if n > 0 && n < len(weeks) {
+		return weeks[len(weeks)-n:]
+	}
+	return weeks
+}
+
+// maxTotal is the biggest weekly total, the scale every building is measured
+// against.
+func maxTotal(weeks [][]github.Day) int {
+	max := 0
+	for _, w := range weeks {
+		total := 0
+		for _, d := range w {
+			total += d.Count
+		}
+		if total > max {
+			max = total
+		}
+	}
+	return max
+}
+
+// build draws the scene for weeks, scaling heights against maxTotal so that
+// several scenes can share one scale (see BuildCompare).
+func build(cal *github.Calendar, weeks [][]github.Day, opt Options, maxTotal int) *Scene {
 	if opt.Height < 3 {
 		opt.Height = 3
-	}
-	weeks := cal.Weeks
-	if opt.Weeks > 0 && opt.Weeks < len(weeks) {
-		weeks = weeks[len(weeks)-opt.Weeks:]
 	}
 
 	width := len(weeks) * colWidth
@@ -68,13 +95,13 @@ func Build(cal *github.Calendar, opt Options) *Scene {
 	}
 
 	totals := make([]int, len(weeks))
-	maxTotal, record := 0, -1
+	record := -1
 	for i, w := range weeks {
 		for _, d := range w {
 			totals[i] += d.Count
 		}
-		if totals[i] > maxTotal {
-			maxTotal, record = totals[i], i
+		if totals[i] > 0 && totals[i] == maxTotal && record < 0 {
+			record = i
 		}
 	}
 
